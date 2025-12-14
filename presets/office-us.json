@@ -1,0 +1,10 @@
+{
+  "name": "office-us",
+  "search_window_seconds": 240,
+  "min_intro_seconds": 15,
+  "max_intro_seconds": 90,
+  "similarity_threshold": 0.82,
+  "default_duck_db": -9,
+  "reference_fingerprint": "presets/office-us.fp.npz"
+}
+
