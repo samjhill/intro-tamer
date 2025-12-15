@@ -167,8 +167,11 @@ class FingerprintDetector:
         )
 
         # Sliding window search
-        ref_duration = self.reference_fingerprint.shape[1] / self.sample_rate * 512  # Approximate
-        window_samples = int(ref_duration * self.sample_rate)
+        # Calculate window size from reference fingerprint dimensions
+        # chroma_stft uses hop_length=512 by default, so frames = samples / 512
+        ref_frames = self.reference_fingerprint.shape[1]
+        ref_duration_seconds = ref_frames * 512 / self.sample_rate
+        window_samples = int(ref_duration_seconds * self.sample_rate)
         hop_samples = int(0.5 * self.sample_rate)  # 0.5s hop
 
         best_match = None

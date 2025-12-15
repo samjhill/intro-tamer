@@ -16,6 +16,15 @@ class IntroInfo(BaseModel):
     method: str
 
 
+class OutroInfo(BaseModel):
+    """Outro detection information."""
+
+    start: float
+    end: float
+    confidence: float
+    method: str
+
+
 class AudioInfo(BaseModel):
     """Audio processing information."""
 
@@ -39,6 +48,7 @@ class ProcessingReport(BaseModel):
     input: str
     output: str
     intro: IntroInfo
+    outro: Optional[OutroInfo] = None
     audio: AudioInfo
     settings: SettingsInfo
 

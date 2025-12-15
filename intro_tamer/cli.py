@@ -258,6 +258,7 @@ def process_video_file(
     # Write report
     if report_json:
         report_path = output_file.with_suffix(".json")
+        from intro_tamer.reporting import OutroInfo
         report = ProcessingReport(
             input=str(input_file),
             output=str(output_file),
@@ -267,6 +268,12 @@ def process_video_file(
                 confidence=intro_boundaries.confidence,
                 method=intro_boundaries.method,
             ),
+            outro=OutroInfo(
+                start=outro_boundaries.start,
+                end=outro_boundaries.end,
+                confidence=outro_boundaries.confidence,
+                method=outro_boundaries.method,
+            ) if outro_boundaries else None,
             audio=AudioInfo(
                 intro_lufs_before=intro_lufs_before,
                 intro_lufs_after=intro_lufs_after,
