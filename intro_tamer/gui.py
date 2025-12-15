@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import threading
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,6 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from intro_tamer.cli import process_video_file
+from intro_tamer.preview import PreviewWindow
 
 
 class IntroTamerGUI:
@@ -18,6 +20,9 @@ class IntroTamerGUI:
         self.root = root
         self.root.title("Intro Tamer")
         self.root.geometry("800x700")
+        
+        # Config file path
+        self.config_file = Path.home() / ".intro_tamer_config.json"
         
         self.input_folder = tk.StringVar()
         self.output_folder = tk.StringVar()
@@ -36,7 +41,13 @@ class IntroTamerGUI:
         self.failed_count = 0
         self.lock = threading.Lock()
         
+        # Load saved config
+        self.load_config()
+        
         self.setup_ui()
+        
+        # Save config when window closes
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def setup_ui(self):
         """Set up the user interface."""
@@ -85,23 +96,26 @@ class IntroTamerGUI:
         
         # Preset selection
         ttk.Label(settings_frame, text="Preset:").grid(row=settings_row, column=0, sticky=tk.W, pady=5)
-        preset_combo = ttk.Combobox(settings_frame, textvariable=self.preset, width=30, state="readonly")
-        preset_combo["values"] = ("office-us",)
-        preset_combo.grid(row=settings_row, column=1, sticky=tk.W, padx=5, pady=5)
+        self.preset_combo = ttk.Combobox(settings_frame, textvariable=self.preset, width=30, state="readonly")
+        self.preset_combo["values"] = ("office-us",)
+        self.preset_combo.grid(row=settings_row, column=1, sticky=tk.W, padx=5, pady=5)
+        self.preset_combo.bind("<<ComboboxSelected>>", lambda e: self.save_config())
         settings_row += 1
         
         # Duck dB
         ttk.Label(settings_frame, text="Gain Reduction (dB):").grid(row=settings_row, column=0, sticky=tk.W, pady=5)
         duck_frame = ttk.Frame(settings_frame)
         duck_frame.grid(row=settings_row, column=1, sticky=tk.W, padx=5, pady=5)
-        ttk.Scale(
+        duck_scale = ttk.Scale(
             duck_frame,
             from_=-30,
             to=-5,
             variable=self.duck_db,
             orient=tk.HORIZONTAL,
             length=200,
-        ).pack(side=tk.LEFT)
+            command=lambda v: self.save_config(),
+        )
+        duck_scale.pack(side=tk.LEFT)
         ttk.Label(duck_frame, textvariable=self.duck_db, width=6).pack(side=tk.LEFT, padx=5)
         settings_row += 1
         
@@ -109,14 +123,16 @@ class IntroTamerGUI:
         ttk.Label(settings_frame, text="Fade Duration (ms):").grid(row=settings_row, column=0, sticky=tk.W, pady=5)
         fade_frame = ttk.Frame(settings_frame)
         fade_frame.grid(row=settings_row, column=1, sticky=tk.W, padx=5, pady=5)
-        ttk.Scale(
+        fade_scale = ttk.Scale(
             fade_frame,
             from_=50,
             to=500,
             variable=self.fade_ms,
             orient=tk.HORIZONTAL,
             length=200,
-        ).pack(side=tk.LEFT)
+            command=lambda v: self.save_config(),
+        )
+        fade_scale.pack(side=tk.LEFT)
         ttk.Label(fade_frame, textvariable=self.fade_ms, width=6).pack(side=tk.LEFT, padx=5)
         settings_row += 1
         
@@ -124,14 +140,16 @@ class IntroTamerGUI:
         ttk.Label(settings_frame, text="Threads:").grid(row=settings_row, column=0, sticky=tk.W, pady=5)
         thread_frame = ttk.Frame(settings_frame)
         thread_frame.grid(row=settings_row, column=1, sticky=tk.W, padx=5, pady=5)
-        ttk.Scale(
+        thread_scale = ttk.Scale(
             thread_frame,
             from_=1,
             to=8,
             variable=self.thread_count,
             orient=tk.HORIZONTAL,
             length=200,
-        ).pack(side=tk.LEFT)
+            command=lambda v: self.save_config(),
+        )
+        thread_scale.pack(side=tk.LEFT)
         ttk.Label(thread_frame, textvariable=self.thread_count, width=6).pack(side=tk.LEFT, padx=5)
         settings_row += 1
         
@@ -140,6 +158,9 @@ class IntroTamerGUI:
         # Control buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=row, column=0, columnspan=3, pady=10)
+        
+        self.preview_button = ttk.Button(button_frame, text="Preview First File", command=self.preview_first_file)
+        self.preview_button.pack(side=tk.LEFT, padx=5)
         
         self.start_button = ttk.Button(button_frame, text="Start Processing", command=self.start_processing)
         self.start_button.pack(side=tk.LEFT, padx=5)
@@ -193,12 +214,57 @@ class IntroTamerGUI:
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         
+    def load_config(self):
+        """Load configuration from file."""
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                    if 'input_folder' in config:
+                        self.input_folder.set(config['input_folder'])
+                    if 'output_folder' in config:
+                        self.output_folder.set(config['output_folder'])
+                    if 'preset' in config:
+                        self.preset.set(config['preset'])
+                    if 'duck_db' in config:
+                        self.duck_db.set(config['duck_db'])
+                    if 'fade_ms' in config:
+                        self.fade_ms.set(config['fade_ms'])
+                    if 'thread_count' in config:
+                        self.thread_count.set(config['thread_count'])
+            except Exception as e:
+                # If config file is corrupted, just use defaults
+                pass
+    
+    def save_config(self):
+        """Save configuration to file."""
+        try:
+            config = {
+                'input_folder': self.input_folder.get(),
+                'output_folder': self.output_folder.get(),
+                'preset': self.preset.get(),
+                'duck_db': self.duck_db.get(),
+                'fade_ms': self.fade_ms.get(),
+                'thread_count': self.thread_count.get(),
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            # Silently fail if we can't save config
+            pass
+    
+    def on_closing(self):
+        """Handle window closing event."""
+        self.save_config()
+        self.root.destroy()
+    
     def select_input_folder(self):
         """Open folder picker for input directory."""
         folder = filedialog.askdirectory(title="Select Input Folder")
         if folder:
             self.input_folder.set(folder)
             self.log(f"Selected input folder: {folder}")
+            self.save_config()
             
     def select_output_folder(self):
         """Open folder picker for output directory."""
@@ -206,6 +272,37 @@ class IntroTamerGUI:
         if folder:
             self.output_folder.set(folder)
             self.log(f"Selected output folder: {folder}")
+            self.save_config()
+    
+    def preview_first_file(self):
+        """Open preview window for the first file in the input folder."""
+        if not self.input_folder.get():
+            messagebox.showerror("Error", "Please select an input folder")
+            return
+        
+        # Find first video file
+        input_path = Path(self.input_folder.get())
+        video_extensions = {".mkv", ".mp4", ".avi", ".mov", ".m4v"}
+        video_files = []
+        
+        for ext in video_extensions:
+            video_files.extend(input_path.rglob(f"*{ext}"))
+        
+        if not video_files:
+            messagebox.showwarning("Warning", "No video files found in input folder")
+            return
+        
+        video_files.sort()
+        first_file = video_files[0]
+        
+        # Open preview window
+        PreviewWindow(
+            self.root,
+            first_file,
+            self.preset.get(),
+            self.duck_db.get(),
+            self.fade_ms.get(),
+        )
             
     def log(self, message):
         """Add message to log."""
@@ -248,6 +345,7 @@ class IntroTamerGUI:
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.progress_var.set(0)
+        self.update_progress(0, len(self.video_files), "Starting processing...")
         
         # Start processing in background thread
         self.processing_thread = threading.Thread(target=self.process_videos, daemon=True)
@@ -337,12 +435,15 @@ class IntroTamerGUI:
         
         if skipped_count > 0:
             self.log(f"Resuming: {skipped_count} already processed, {len(remaining_files)} remaining")
+            # Update progress for skipped files
+            self.update_progress(skipped_count, len(self.video_files), f"Resuming: {skipped_count} already processed")
         
         if not remaining_files:
             self.log("All files already processed!")
             self.is_processing = False
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
+            self.update_progress(len(self.video_files), len(self.video_files), "All files already processed!")
             self.status_label.config(text=f"Complete! All {len(self.video_files)} files already processed")
             messagebox.showinfo("Complete", f"All {len(self.video_files)} files are already processed!")
             return
@@ -350,6 +451,7 @@ class IntroTamerGUI:
         # Process remaining files with multithreading
         thread_count = self.thread_count.get()
         self.log(f"Processing {len(remaining_files)} files with {thread_count} thread(s)...")
+        self.update_progress(skipped_count, len(self.video_files), f"Starting processing with {thread_count} thread(s)...")
         
         self.executor = ThreadPoolExecutor(max_workers=thread_count)
         futures = {}
@@ -370,7 +472,7 @@ class IntroTamerGUI:
             if result == "stopped":
                 break
             elif result == "skipped":
-                # Already logged
+                # Already logged and counted
                 pass
             elif result == "success":
                 self.log(f"✓ Success: {rel_path.name}")
@@ -378,10 +480,11 @@ class IntroTamerGUI:
                 error_msg = result.split(":", 1)[1] if ":" in result else result
                 self.log(f"✗ Error processing {rel_path.name}: {error_msg}")
             
-            # Update progress
+            # Update progress after each completion
             with self.lock:
                 current = self.processed_count
-            self.update_progress(current, len(self.video_files), f"Processing: {rel_path.name if isinstance(rel_path, Path) else '...'}")
+            rel_name = rel_path.name if isinstance(rel_path, Path) else str(rel_path)
+            self.update_progress(current, len(self.video_files), f"Processing: {rel_name}")
         
         # Shutdown executor
         if self.executor:
@@ -408,10 +511,14 @@ class IntroTamerGUI:
     def update_progress(self, current, total, message):
         """Update progress bar and status (thread-safe)."""
         def _update():
-            percentage = (current / total) * 100
-            self.progress_var.set(percentage)
-            self.current_file_label.config(text=message)
-            self.status_label.config(text=f"Processing {current} of {total} files ({percentage:.1f}%)")
+            try:
+                percentage = (current / total) * 100 if total > 0 else 0
+                self.progress_var.set(percentage)
+                self.current_file_label.config(text=message)
+                self.status_label.config(text=f"Processing {current} of {total} files ({percentage:.1f}%)")
+            except Exception as e:
+                # Silently handle any UI update errors
+                pass
         
         # Schedule UI update on main thread
         self.root.after(0, _update)
