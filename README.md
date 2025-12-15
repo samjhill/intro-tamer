@@ -27,7 +27,30 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Basic processing
+### GUI Application (Recommended)
+
+Launch the graphical user interface:
+
+```bash
+intro-tamer-gui
+```
+
+Or:
+
+```bash
+python -m intro_tamer.gui
+```
+
+The GUI provides:
+- Folder picker for input/output directories
+- Real-time progress tracking
+- Adjustable settings (preset, gain reduction, fade duration)
+- Log output
+- Start/stop controls
+
+### Command Line
+
+#### Basic processing
 
 ```bash
 intro-tamer process "The Office S02E01.mkv" --preset office-us

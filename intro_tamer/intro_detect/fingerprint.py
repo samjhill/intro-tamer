@@ -181,7 +181,12 @@ class FingerprintDetector:
         # Add padding
         padding_seconds = padding_ms / 1000.0
         intro_start = max(0.0, match_start_time - padding_seconds)
-        intro_end = match_end_time + padding_seconds
+        
+        # Extend intro_end further to capture the full intro
+        # The reference fingerprint might be shorter than the actual intro
+        # So we extend by the reference duration again to ensure we get the full intro
+        ref_duration_seconds = window_samples / self.sample_rate
+        intro_end = match_end_time + padding_seconds + (ref_duration_seconds * 0.5)  # Extend by 50% more to ensure full intro
 
         return IntroBoundaries(
             start=intro_start,

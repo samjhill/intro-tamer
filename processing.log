@@ -1,0 +1,25 @@
+Found 171 video file(s)
+Skipping (already exists): Season 
+1/The.Office.S01E01.1080p.BluRay.x264-BORDURE.mkv
+Skipping (already exists): Season 
+1/The.Office.S01E02.1080p.BluRay.x264-BORDURE.mkv
+Skipping (already exists): Season 
+1/The.Office.S01E03.1080p.BluRay.x264-BORDURE.mkv
+
+Processing: Season 1/The.Office.S01E04.REPACK.1080p.BluRay.x264-BORDURE.mkv
+Loaded preset: office-us
+
+
+Detected intro: 21.30s - 56.22s (confidence: 0.96, method: fingerprint)
+Gain adjustment: -10.0 dB
+Intro loudness: -70.0 LUFS → -80.0 LUFS
+Success! Output: /Volumes/media/tv/The Office - tamed/Season 
+1/The.Office.S01E04.REPACK.1080p.BluRay.x264-BORDURE.intro_tamed.mkv
+
+Report saved: /Volumes/media/tv/The Office - tamed/Season 
+1/The.Office.S01E04.REPACK.1080p.BluRay.x264-BORDURE.intro_tamed.json
+✓ Success: The.Office.S01E04.REPACK.1080p.BluRay.x264-BORDURE.intro_tamed.mkv
+
+Processing: Season 1/The.Office.S01E05.1080p.BluRay.x264-BORDURE.mkv
+Loaded preset: office-us
+

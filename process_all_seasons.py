@@ -11,7 +11,7 @@ from intro_tamer.cli import process_video_file
 
 console = Console()
 
-def process_all_seasons(source_dir: Path, dest_dir: Path, preset: str = "office-us", duck_db: float = -8.0):
+def process_all_seasons(source_dir: Path, dest_dir: Path, preset: str = "office-us", duck_db: float = -10.0):
     """Process all episodes in season folders, preserving structure."""
     
     source_dir = Path(source_dir)
@@ -100,5 +100,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:
         dest = Path(sys.argv[2])
     
-    process_all_seasons(source, dest, preset="office-us", duck_db=-8.0)
+    process_all_seasons(source, dest, preset="office-us", duck_db=-10.0)
 
