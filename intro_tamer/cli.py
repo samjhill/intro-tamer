@@ -193,10 +193,42 @@ def process_video_file(
     if intro_lufs_before:
         console.print(f"[green]Intro loudness:[/green] {intro_lufs_before:.1f} LUFS → {intro_lufs_after:.1f} LUFS")
 
+    # Detect outro boundaries (using same fingerprint, searching from end)
+    outro_boundaries: Optional[IntroBoundaries] = None
+    
+    with console.status("[bold green]Detecting outro..."):
+        if loaded_preset and loaded_preset.reference_fingerprint:
+            try:
+                fingerprint_path = Path(loaded_preset.reference_fingerprint)
+                if not fingerprint_path.is_absolute():
+                    fingerprint_path = Path(__file__).parent.parent / fingerprint_path
+
+                detector = FingerprintDetector(
+                    reference_fingerprint_path=fingerprint_path,
+                    similarity_threshold=loaded_preset.similarity_threshold,
+                )
+                # Search backwards from the end
+                outro_boundaries = detector.detect(
+                    input_file,
+                    search_start=0.0,
+                    search_duration=min(loaded_preset.search_window_seconds, media_info.duration),
+                    audio_stream_index=audio_stream_index,
+                    search_from_end=True,
+                )
+                if outro_boundaries:
+                    console.print(
+                        f"[green]Detected outro:[/green] {outro_boundaries.start:.2f}s - {outro_boundaries.end:.2f}s "
+                        f"(confidence: {outro_boundaries.confidence:.2f})"
+                    )
+            except Exception as e:
+                console.print(f"[yellow]Outro detection failed:[/yellow] {e}")
+
     # Build render config
     render_config = RenderConfig(
         intro_start=intro_boundaries.start,
         intro_end=intro_boundaries.end,
+        outro_start=outro_boundaries.start if outro_boundaries else None,
+        outro_end=outro_boundaries.end if outro_boundaries else None,
         gain_db=gain_db,
         fade_ms=fade_ms,
         audio_stream_index=audio_stream_index,

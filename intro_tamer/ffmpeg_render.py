@@ -12,6 +12,8 @@ class RenderConfig(BaseModel):
 
     intro_start: float
     intro_end: float
+    outro_start: Optional[float] = None  # Optional outro start time
+    outro_end: Optional[float] = None  # Optional outro end time
     gain_db: float  # Negative = reduce loudness
     fade_ms: int = 120
     audio_stream_index: int = 0
@@ -20,10 +22,10 @@ class RenderConfig(BaseModel):
 
 def build_audio_filtergraph(config: RenderConfig) -> str:
     """
-    Build FFmpeg audio filtergraph for intro ducking.
+    Build FFmpeg audio filtergraph for intro and outro ducking.
 
-    Uses volume filter with enable expression and afade for smooth transitions.
-    This approach splits the processing into: fade down, apply gain, fade up.
+    Uses volume filter with time-based expression to apply gain to both intro and outro segments,
+    with smooth fade transitions.
 
     Args:
         config: Render configuration
@@ -32,106 +34,44 @@ def build_audio_filtergraph(config: RenderConfig) -> str:
         Filtergraph string
     """
     fade_seconds = config.fade_ms / 1000.0
-    gain_db = config.gain_db
+    gain_multiplier = 10 ** (config.gain_db / 20.0)
     
-    # Calculate fade boundaries
-    fade_in_end = config.intro_start + fade_seconds
-    fade_out_start = config.intro_end - fade_seconds
+    # Calculate fade boundaries for intro
+    intro_fade_in_end = config.intro_start + fade_seconds
+    intro_fade_out_start = config.intro_end - fade_seconds
     
-    # Use a filter chain that:
-    # 1. Applies volume reduction only during the intro period (with enable)
-    # 2. Uses afade for smooth transitions at boundaries
-    #
-    # Note: We apply the volume filter with enable='between()' to only affect the intro,
-    # and use afade filters for the fade transitions. However, afade affects the entire
-    # stream from that point, so we need to be careful.
-    #
-    # Better approach: Use volume with enable for the main reduction, and handle
-    # fades separately. Actually, let's use a simpler approach with just volume
-    # and enable, then add fades using volume expressions.
-    
-    # Simple approach: volume with enable expression for main reduction
-    # Then add afade filters for transitions (but these affect the whole stream)
-    # 
-    # Actually, the best approach is to use volume filter with a time-based expression
-    # that includes the fades. Let's use a simpler expression that FFmpeg can handle.
-    
-    filtergraph = f"volume={gain_db}dB:enable='between(t,{fade_in_end},{fade_out_start})'"
-    
-    # Add fade transitions using afade, but we need to be careful about timing
-    # Actually, let's combine everything into one volume expression that's simpler
-    gain_multiplier = 10 ** (gain_db / 20.0)
-    
-    # Use a complex filtergraph that splits audio into segments
-    # This is more reliable than time-based volume expressions
-    # 
-    # Split audio into 3 parts:
-    # [0] = audio input
-    # [1] = segment before intro (0 to intro_start)
-    # [2] = intro segment (intro_start to intro_end) with volume reduction and fades  
-    # [3] = segment after intro (intro_end to end)
-    # Then concatenate [1][2][3]
-    
-    # Build the filtergraph string
-    # aselect='between(t,0,' + str(config.intro_start) + ')' for segment 1
-    # aselect='between(t,' + str(config.intro_start) + ',' + str(config.intro_end) + ')' for segment 2
-    # aselect='between(t,' + str(config.intro_end) + ',999999)' for segment 3
-    
-    # Actually, FFmpeg filtergraph syntax for this is complex. Let's use a simpler
-    # approach: use volume with a direct dB value and enable expression
-    # But we need fades, so let's combine afade with volume
-    
-    # Use afade filters with enable expressions to limit their effect to the intro segment only
-    # This is more reliable than complex volume expressions
-    gain_db = config.gain_db
-    
-    # Apply volume reduction during intro, with fades at boundaries
-    # Use afade with enable to fade down at start, volume with enable for main reduction,
-    # and afade with enable to fade up at end
-    
-    # Calculate the exact timing for each fade
-    # Fade out: from intro_start to fade_in_end (reduces volume)
-    # Volume: from fade_in_end to fade_out_start (main reduction)  
-    # Fade in: from fade_out_start to intro_end (increases volume back)
-    
-    # Use volume filter with enable for the steady intro period
-    # Then use afade with enable for the fade transitions
-    # But afade doesn't support enable, so we need a different approach
-    
-    # Better: Use volume filter with a time-based expression that includes fades
-    # But make it simpler - use direct dB values with enable for the main reduction,
-    # and handle fades separately
-    
-    # Actually, the most reliable approach: use volume with enable for main reduction,
-    # and use volume expressions for the fade transitions (but these are complex)
-    
-    # Let's try: volume filter with enable for steady intro, and separate volume
-    # filters with enable for fade transitions
-    # But that requires multiple filters which is complex
-    
-    # Simplest working approach: Use volume with enable for the main reduction period,
-    # and accept that fades might not be perfect, or use a simpler fade approach
-    
-    # For now, let's use volume with enable for the main reduction
-    # The fades can be handled by the volume expression, but let's simplify it
-    filtergraph = f"volume={gain_db}dB:enable='between(t,{fade_in_end},{fade_out_start})'"
-    
-    # Add fades using afade, but we need to be careful - afade affects the whole stream
-    # So we'll apply afade only during the fade periods using enable... but afade doesn't support enable
-    
-    # Final approach: Use a volume expression that's simpler and more reliable
-    # Just apply the reduction during the intro period, with simple linear fades
-    gain_multiplier = 10 ** (gain_db / 20.0)
-    
-    # Simplified expression: apply gain_multiplier during intro, 1.0 elsewhere
-    # Add linear fades at boundaries
-    filtergraph = (
-        f"volume="
-        f"'if(between(t,{config.intro_start},{config.intro_end}),"
-        f"if(lt(t,{fade_in_end}),1+({gain_multiplier}-1)*((t-{config.intro_start})/{fade_seconds}),"
-        f"if(gt(t,{fade_out_start}),{gain_multiplier}+(1-{gain_multiplier})*((t-{fade_out_start})/{fade_seconds}),"
-        f"{gain_multiplier})),1)':eval=frame"
+    # Build expression for intro segment
+    intro_expr = (
+        f"if(between(t,{config.intro_start},{config.intro_end}),"
+        f"if(lt(t,{intro_fade_in_end}),1+({gain_multiplier}-1)*((t-{config.intro_start})/{fade_seconds}),"
+        f"if(gt(t,{intro_fade_out_start}),{gain_multiplier}+(1-{gain_multiplier})*((t-{intro_fade_out_start})/{fade_seconds}),"
+        f"{gain_multiplier})),1)"
     )
+    
+    # Build expression for outro segment (if provided)
+    if config.outro_start is not None and config.outro_end is not None:
+        outro_fade_in_end = config.outro_start + fade_seconds
+        outro_fade_out_start = config.outro_end - fade_seconds
+        
+        outro_expr = (
+            f"if(between(t,{config.outro_start},{config.outro_end}),"
+            f"if(lt(t,{outro_fade_in_end}),1+({gain_multiplier}-1)*((t-{config.outro_start})/{fade_seconds}),"
+            f"if(gt(t,{outro_fade_out_start}),{gain_multiplier}+(1-{gain_multiplier})*((t-{outro_fade_out_start})/{fade_seconds}),"
+            f"{gain_multiplier})),1)"
+        )
+        
+        # Combine intro and outro expressions
+        # Apply the minimum of the two (so if either segment applies reduction, use it)
+        filtergraph = (
+            f"volume="
+            f"'min({intro_expr},{outro_expr})':eval=frame"
+        )
+    else:
+        # Only intro
+        filtergraph = (
+            f"volume="
+            f"'{intro_expr}':eval=frame"
+        )
 
     return filtergraph
 

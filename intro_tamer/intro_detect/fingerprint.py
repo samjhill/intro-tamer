@@ -129,9 +129,10 @@ class FingerprintDetector:
         search_duration: float = 300.0,
         audio_stream_index: int = 0,
         padding_ms: float = 200.0,
+        search_from_end: bool = False,
     ) -> Optional[IntroBoundaries]:
         """
-        Detect intro boundaries in video file.
+        Detect intro or outro boundaries in video file.
 
         Args:
             video_path: Path to video file
@@ -139,15 +140,28 @@ class FingerprintDetector:
             search_duration: Duration of search window in seconds
             audio_stream_index: Audio stream index
             padding_ms: Padding to add before/after match in milliseconds
+            search_from_end: If True, search backwards from the end of the file
 
         Returns:
             IntroBoundaries if detected, None otherwise
         """
+        # Get video duration for end-based search
+        from intro_tamer.media_probe import probe_media
+        media_info = probe_media(video_path)
+        
+        # Adjust search window if searching from end
+        if search_from_end:
+            actual_search_start = max(0.0, media_info.duration - search_duration - search_start)
+            actual_search_duration = min(search_duration, media_info.duration - actual_search_start)
+        else:
+            actual_search_start = search_start
+            actual_search_duration = search_duration
+        
         # Extract search window audio
         search_audio, _ = extract_audio_segment(
             video_path,
-            search_start,
-            search_duration,
+            actual_search_start,
+            actual_search_duration,
             audio_stream_index,
             self.sample_rate,
         )
@@ -175,22 +189,21 @@ class FingerprintDetector:
             return None
 
         # Convert offset to time
-        match_start_time = search_start + (best_offset / self.sample_rate)
+        match_start_time = actual_search_start + (best_offset / self.sample_rate)
         match_end_time = match_start_time + (window_samples / self.sample_rate)
 
         # Add padding
         padding_seconds = padding_ms / 1000.0
-        intro_start = max(0.0, match_start_time - padding_seconds)
+        segment_start = max(0.0, match_start_time - padding_seconds)
         
-        # Extend intro_end further to capture the full intro
-        # The reference fingerprint might be shorter than the actual intro
-        # So we extend by the reference duration again to ensure we get the full intro
+        # Extend segment_end further to capture the full segment
+        # The reference fingerprint might be shorter than the actual segment
         ref_duration_seconds = window_samples / self.sample_rate
-        intro_end = match_end_time + padding_seconds + (ref_duration_seconds * 0.5)  # Extend by 50% more to ensure full intro
+        segment_end = min(media_info.duration, match_end_time + padding_seconds + (ref_duration_seconds * 0.5))
 
         return IntroBoundaries(
-            start=intro_start,
-            end=intro_end,
+            start=segment_start,
+            end=segment_end,
             confidence=best_score,
             method="fingerprint",
         )
