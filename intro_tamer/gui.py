@@ -4,6 +4,7 @@ import contextlib
 import io
 import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -23,11 +24,17 @@ class IntroTamerGUI:
         self.preset = tk.StringVar(value="office-us")
         self.duck_db = tk.DoubleVar(value=-10.0)
         self.fade_ms = tk.IntVar(value=120)
+        self.thread_count = tk.IntVar(value=4)
         
         self.is_processing = False
         self.processing_thread = None
+        self.executor = None
         self.video_files = []
         self.current_file_index = 0
+        self.processed_count = 0
+        self.successful_count = 0
+        self.failed_count = 0
+        self.lock = threading.Lock()
         
         self.setup_ui()
         
@@ -111,6 +118,21 @@ class IntroTamerGUI:
             length=200,
         ).pack(side=tk.LEFT)
         ttk.Label(fade_frame, textvariable=self.fade_ms, width=6).pack(side=tk.LEFT, padx=5)
+        settings_row += 1
+        
+        # Thread count
+        ttk.Label(settings_frame, text="Threads:").grid(row=settings_row, column=0, sticky=tk.W, pady=5)
+        thread_frame = ttk.Frame(settings_frame)
+        thread_frame.grid(row=settings_row, column=1, sticky=tk.W, padx=5, pady=5)
+        ttk.Scale(
+            thread_frame,
+            from_=1,
+            to=8,
+            variable=self.thread_count,
+            orient=tk.HORIZONTAL,
+            length=200,
+        ).pack(side=tk.LEFT)
+        ttk.Label(thread_frame, textvariable=self.thread_count, width=6).pack(side=tk.LEFT, padx=5)
         settings_row += 1
         
         row += 1
@@ -220,6 +242,9 @@ class IntroTamerGUI:
         # Update UI
         self.is_processing = True
         self.current_file_index = 0
+        self.processed_count = 0
+        self.successful_count = 0
+        self.failed_count = 0
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.progress_var.set(0)
@@ -231,74 +256,146 @@ class IntroTamerGUI:
     def stop_processing(self):
         """Stop processing videos."""
         self.is_processing = False
+        if self.executor:
+            self.executor.shutdown(wait=False, cancel_futures=True)
         self.log("Stopping processing...")
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         
+    def process_single_file(self, video_file, input_path, output_path):
+        """Process a single video file (for multithreading)."""
+        if not self.is_processing:
+            return None, "stopped"
+            
+        # Calculate relative path
+        try:
+            rel_path = video_file.relative_to(input_path)
+        except ValueError:
+            rel_path = Path(video_file.name)
+            
+        # Determine output path preserving structure
+        output_file = output_path / rel_path.parent / f"{video_file.stem}.intro_tamed{video_file.suffix}"
+        
+        # Create output directory if needed
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Skip if already processed (resume capability)
+        if output_file.exists():
+            with self.lock:
+                self.processed_count += 1
+                self.successful_count += 1
+            return rel_path, "skipped"
+            
+        try:
+            # Suppress console output during processing
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                process_video_file(
+                    input_file=video_file,
+                    output_file=output_file,
+                    preset=self.preset.get(),
+                    duck_db=self.duck_db.get(),
+                    fade_ms=self.fade_ms.get(),
+                    report_json=True,
+                    keep_codecs=True,
+                    allow_fallback=True,
+                )
+            with self.lock:
+                self.processed_count += 1
+                self.successful_count += 1
+            return rel_path, "success"
+        except Exception as e:
+            with self.lock:
+                self.processed_count += 1
+                self.failed_count += 1
+            return rel_path, f"error: {str(e)}"
+    
     def process_videos(self):
-        """Process all video files."""
+        """Process all video files using multithreading."""
         input_path = Path(self.input_folder.get())
         output_path = Path(self.output_folder.get())
         
-        successful = 0
-        failed = 0
+        # Filter out already processed files for resume capability
+        remaining_files = []
+        skipped_count = 0
         
-        for idx, video_file in enumerate(self.video_files):
-            if not self.is_processing:
-                self.log("Processing stopped by user")
-                break
-                
-            self.current_file_index = idx
-            
-            # Calculate relative path
+        for video_file in self.video_files:
             try:
                 rel_path = video_file.relative_to(input_path)
             except ValueError:
-                # If file is not under input_path, use just the filename
                 rel_path = Path(video_file.name)
                 
-            # Determine output path preserving structure
             output_file = output_path / rel_path.parent / f"{video_file.stem}.intro_tamed{video_file.suffix}"
             
-            # Create output directory if needed
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Skip if already processed
             if output_file.exists():
+                skipped_count += 1
+                with self.lock:
+                    self.processed_count += 1
+                    self.successful_count += 1
                 self.log(f"Skipping (already exists): {rel_path}")
-                successful += 1
-                self.update_progress(idx + 1, len(self.video_files), f"Skipped: {rel_path.name}")
-                continue
+            else:
+                remaining_files.append(video_file)
+        
+        if skipped_count > 0:
+            self.log(f"Resuming: {skipped_count} already processed, {len(remaining_files)} remaining")
+        
+        if not remaining_files:
+            self.log("All files already processed!")
+            self.is_processing = False
+            self.start_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED)
+            self.status_label.config(text=f"Complete! All {len(self.video_files)} files already processed")
+            messagebox.showinfo("Complete", f"All {len(self.video_files)} files are already processed!")
+            return
+        
+        # Process remaining files with multithreading
+        thread_count = self.thread_count.get()
+        self.log(f"Processing {len(remaining_files)} files with {thread_count} thread(s)...")
+        
+        self.executor = ThreadPoolExecutor(max_workers=thread_count)
+        futures = {}
+        
+        for video_file in remaining_files:
+            if not self.is_processing:
+                break
+            future = self.executor.submit(self.process_single_file, video_file, input_path, output_path)
+            futures[future] = video_file
+        
+        # Process completed tasks
+        for future in as_completed(futures):
+            if not self.is_processing:
+                break
                 
-            # Update UI
-            self.update_progress(idx + 1, len(self.video_files), f"Processing: {rel_path.name}")
+            rel_path, result = future.result()
             
-            try:
-                # Suppress console output during processing
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    process_video_file(
-                        input_file=video_file,
-                        output_file=output_file,
-                        preset=self.preset.get(),
-                        duck_db=self.duck_db.get(),
-                        fade_ms=self.fade_ms.get(),
-                        report_json=True,
-                        keep_codecs=True,
-                        allow_fallback=True,
-                    )
-                successful += 1
+            if result == "stopped":
+                break
+            elif result == "skipped":
+                # Already logged
+                pass
+            elif result == "success":
                 self.log(f"✓ Success: {rel_path.name}")
-            except Exception as e:
-                failed += 1
-                error_msg = str(e)
+            elif result.startswith("error"):
+                error_msg = result.split(":", 1)[1] if ":" in result else result
                 self.log(f"✗ Error processing {rel_path.name}: {error_msg}")
-                import traceback
-                self.log(f"   Details: {traceback.format_exc()}")
+            
+            # Update progress
+            with self.lock:
+                current = self.processed_count
+            self.update_progress(current, len(self.video_files), f"Processing: {rel_path.name if isinstance(rel_path, Path) else '...'}")
+        
+        # Shutdown executor
+        if self.executor:
+            self.executor.shutdown(wait=True)
+            self.executor = None
                 
         # Processing complete
         self.is_processing = False
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
+        
+        with self.lock:
+            successful = self.successful_count
+            failed = self.failed_count
         
         self.log(f"\nProcessing complete!")
         self.log(f"  Successful: {successful}")
@@ -309,12 +406,15 @@ class IntroTamerGUI:
         messagebox.showinfo("Complete", f"Processing complete!\n\nSuccessful: {successful}\nFailed: {failed}")
         
     def update_progress(self, current, total, message):
-        """Update progress bar and status."""
-        percentage = (current / total) * 100
-        self.progress_var.set(percentage)
-        self.current_file_label.config(text=message)
-        self.status_label.config(text=f"Processing {current} of {total} files ({percentage:.1f}%)")
-        self.root.update_idletasks()
+        """Update progress bar and status (thread-safe)."""
+        def _update():
+            percentage = (current / total) * 100
+            self.progress_var.set(percentage)
+            self.current_file_label.config(text=message)
+            self.status_label.config(text=f"Processing {current} of {total} files ({percentage:.1f}%)")
+        
+        # Schedule UI update on main thread
+        self.root.after(0, _update)
 
 
 def main():
